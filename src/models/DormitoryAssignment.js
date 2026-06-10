@@ -23,8 +23,12 @@ const dormitoryAssignmentSchema = new mongoose.Schema({
   },
   assignmentType: {
     type: String,
-    enum: ['auto_match', 'manual_select', 'admin_assign'],
+    enum: ['auto_match', 'manual_select', 'admin_assign', 'transfer', 'check_out'],
     required: true,
+  },
+  previousAssignmentId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'DormitoryAssignment',
   },
   matchScore: Number,
   matchCriteria: {

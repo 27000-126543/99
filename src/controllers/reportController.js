@@ -44,10 +44,44 @@ exports.getReports = async (req, res, next) => {
   }
 };
 
+exports.getBuildingComparison = async (req, res, next) => {
+  try {
+    const { buildingIds, startDate, endDate } = req.query;
+    let buildingIdsArray = buildingIds;
+    if (buildingIds && typeof buildingIds === 'string') {
+      buildingIdsArray = buildingIds.split(',').map((id) => id.trim());
+    }
+
+    const data = await ReportService.getBuildingComparison({
+      buildingIds: buildingIdsArray,
+      startDate,
+      endDate,
+    });
+
+    res.json({
+      success: true,
+      data,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 exports.exportReport = async (req, res, next) => {
   try {
-    const { buildingId, startDate, endDate } = req.query;
-    const workbook = await ReportService.exportToExcel(buildingId, startDate, endDate);
+    const { buildingId, buildingIds, startDate, endDate, format } = req.query;
+    let buildingIdsArray = buildingIds;
+    if (buildingIds && typeof buildingIds === 'string') {
+      buildingIdsArray = buildingIds.split(',').map((id) => id.trim());
+    }
+
+    const workbook = await ReportService.exportToExcel({
+      buildingId,
+      buildingIds: buildingIdsArray,
+      startDate,
+      endDate,
+      format,
+    });
 
     res.setHeader(
       'Content-Type',

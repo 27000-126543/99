@@ -2,6 +2,7 @@ const Bed = require('../models/Bed');
 const Dormitory = require('../models/Dormitory');
 const Building = require('../models/Building');
 const DormitoryAssignment = require('../models/DormitoryAssignment');
+const TransferRequest = require('../models/TransferRequest');
 const NotificationService = require('./notificationService');
 const { AppError } = require('../middleware/errorHandler');
 
@@ -88,61 +89,54 @@ class DormitoryService {
 
     const { dormitory, bed, matchScore, matchCriteria } = matchResult;
 
-    const session = await Bed.startSession();
-    session.startTransaction();
-
-    try {
-      await Bed.findByIdAndUpdate(
-        bed._id,
-        {
+    const lockedBed = await Bed.findOneAndUpdate(
+      {
+        _id: bed._id,
+        status: 'available',
+      },
+      {
+        $set: {
           status: 'occupied',
           studentId: student._id,
           assignedAt: Date.now(),
         },
-        { session }
-      );
+      },
+      { new: true }
+    );
 
-      await Dormitory.findByIdAndUpdate(
-        dormitory._id,
-        { $inc: { occupiedCount: 1 } },
-        { session }
-      );
-
-      const assignment = await DormitoryAssignment.create(
-        [
-          {
-            studentId: student._id,
-            bedId: bed._id,
-            dormitoryId: dormitory._id,
-            buildingId: dormitory.buildingId,
-            assignmentType: 'auto_match',
-            matchScore,
-            matchCriteria,
-            status: 'confirmed',
-            confirmedAt: Date.now(),
-          },
-        ],
-        { session }
-      );
-
-      await session.commitTransaction();
-
-      await NotificationService.sendToStudent(
-        student._id,
-        'dorm_assignment',
-        '宿舍分配成功',
-        `您已被分配到${dormitory.buildingId.name}${dormitory.roomNumber}房间${bed.bedNumber}床位`,
-        assignment[0]._id,
-        'DormitoryAssignment'
-      );
-
-      return assignment[0];
-    } catch (error) {
-      await session.abortTransaction();
-      throw error;
-    } finally {
-      session.endSession();
+    if (!lockedBed) {
+      return this.autoAssignDormitory(student);
     }
+
+    await Dormitory.findByIdAndUpdate(
+      dormitory._id,
+      { $inc: { occupiedCount: 1 } }
+    );
+
+    const assignment = await DormitoryAssignment.create({
+      studentId: student._id,
+      bedId: bed._id,
+      dormitoryId: dormitory._id,
+      buildingId: dormitory.buildingId,
+      assignmentType: 'auto_match',
+      matchScore,
+      matchCriteria,
+      status: 'confirmed',
+      confirmedAt: Date.now(),
+    });
+
+    const building = await Building.findById(dormitory.buildingId);
+
+    await NotificationService.sendToStudent(
+      student._id,
+      'dorm_assignment',
+      '宿舍分配成功',
+      `您已被分配到${building.name}${dormitory.roomNumber}房间${bed.bedNumber}床位`,
+      assignment._id,
+      'DormitoryAssignment'
+    );
+
+    return assignment;
   }
 
   static async getAvailableDormitories(student) {
@@ -188,88 +182,138 @@ class DormitoryService {
       throw new AppError('您已分配宿舍，不能重复选择', 400);
     }
 
-    const bed = await Bed.findById(bedId).populate('dormitoryId');
+    const bed = await Bed.findById(bedId).populate('dormitoryId').populate('buildingId');
 
     if (!bed) {
       throw new AppError('床位不存在', 404);
     }
 
-    if (bed.status !== 'available') {
-      const recommendations = await this.getRecommendations(student);
-      return {
-        success: false,
-        message: '该床位已被占用',
-        recommendations,
-      };
-    }
-
-    const building = await Building.findById(bed.buildingId);
+    const building = bed.buildingId;
     if (building.gender !== student.studentInfo.gender && building.gender !== 'mixed') {
       throw new AppError('该楼栋性别不匹配', 400);
     }
 
-    const session = await Bed.startSession();
-    session.startTransaction();
+    const lockedBed = await Bed.findOneAndUpdate(
+      {
+        _id: bedId,
+        status: 'available',
+      },
+      {
+        $set: {
+          status: 'occupied',
+          studentId: student._id,
+          assignedAt: Date.now(),
+        },
+      },
+      { new: true }
+    );
 
-    try {
-      const lockedBed = await Bed.findByIdAndUpdate(
-        bedId,
-        { status: 'occupied', studentId: student._id, assignedAt: Date.now() },
-        { session, new: true }
-      );
-
-      if (!lockedBed || lockedBed.status !== 'occupied') {
-        await session.abortTransaction();
-        const recommendations = await this.getRecommendations(student);
-        return {
-          success: false,
-          message: '选房冲突，请选择其他床位',
-          recommendations,
-        };
-      }
-
-      await Dormitory.findByIdAndUpdate(
-        bed.dormitoryId,
-        { $inc: { occupiedCount: 1 } },
-        { session }
-      );
-
-      const assignment = await DormitoryAssignment.create(
-        [
-          {
-            studentId: student._id,
-            bedId: bed._id,
-            dormitoryId: bed.dormitoryId,
-            buildingId: bed.buildingId,
-            assignmentType: 'manual_select',
-            status: 'confirmed',
-            confirmedAt: Date.now(),
-          },
-        ],
-        { session }
-      );
-
-      await session.commitTransaction();
-
-      await NotificationService.sendToStudent(
-        student._id,
-        'dorm_assignment',
-        '选房成功',
-        `您已成功选择${building.name}${bed.dormitoryId.roomNumber}房间${bed.bedNumber}床位`,
-        assignment[0]._id,
-        'DormitoryAssignment'
-      );
-
+    if (!lockedBed) {
+      const recommendations = await this.getAvailableBedsRecommendation(student, 5);
       return {
-        success: true,
-        assignment: assignment[0],
+        success: false,
+        message: '该床位已被他人抢先选择，请选择其他床位',
+        recommendations,
       };
-    } catch (error) {
-      await session.abortTransaction();
-      throw error;
-    } finally {
-      session.endSession();
     }
+
+    await Dormitory.findByIdAndUpdate(
+      bed.dormitoryId,
+      { $inc: { occupiedCount: 1 } }
+    );
+
+    const assignment = await DormitoryAssignment.create({
+      studentId: student._id,
+      bedId: bed._id,
+      dormitoryId: bed.dormitoryId,
+      buildingId: bed.buildingId,
+      assignmentType: 'manual_select',
+      status: 'confirmed',
+      confirmedAt: Date.now(),
+    });
+
+    await NotificationService.sendToStudent(
+      student._id,
+      'dorm_assignment',
+      '选房成功',
+      `您已成功选择${building.name}${bed.dormitoryId.roomNumber}房间${bed.bedNumber}床位`,
+      assignment._id,
+      'DormitoryAssignment'
+    );
+
+    return {
+      success: true,
+      assignment,
+    };
+  }
+
+  static async getAvailableBedsRecommendation(student, limit = 5) {
+    const { gender } = student.studentInfo;
+
+    const buildings = await Building.find({
+      $or: [{ gender: gender }, { gender: 'mixed' }],
+    });
+    const buildingIds = buildings.map((b) => b._id);
+
+    const availableBeds = await Bed.aggregate([
+      {
+        $match: {
+          buildingId: { $in: buildingIds },
+          status: 'available',
+        },
+      },
+      {
+        $lookup: {
+          from: 'dormitories',
+          localField: 'dormitoryId',
+          foreignField: '_id',
+          as: 'dormitory',
+        },
+      },
+      {
+        $unwind: '$dormitory',
+      },
+      {
+        $lookup: {
+          from: 'buildings',
+          localField: 'buildingId',
+          foreignField: '_id',
+          as: 'building',
+        },
+      },
+      {
+        $unwind: '$building',
+      },
+      {
+        $match: {
+          'dormitory.selectionLocked': false,
+        },
+      },
+      {
+        $sort: {
+          'dormitory.occupiedCount': 1,
+          'dormitory.comprehensiveScore': -1,
+        },
+      },
+      {
+        $limit: limit,
+      },
+      {
+        $project: {
+          _id: 1,
+          bedNumber: 1,
+          'dormitory._id': 1,
+          'dormitory.roomNumber': 1,
+          'dormitory.floor': 1,
+          'dormitory.comprehensiveScore': 1,
+          'dormitory.occupiedCount': 1,
+          'building._id': 1,
+          'building.name': 1,
+        },
+      },
+    ]);
+
+    return availableBeds;
   }
 
   static async getRecommendations(student) {
@@ -296,6 +340,295 @@ class DormitoryService {
       .populate('bedId')
       .populate('dormitoryId')
       .populate('buildingId');
+  }
+
+  static async getAssignmentHistory(studentId) {
+    return await DormitoryAssignment.find({
+      studentId,
+    })
+      .sort({ createdAt: -1 })
+      .populate('bedId')
+      .populate('dormitoryId')
+      .populate('buildingId');
+  }
+
+  static async createTransferRequest(student, data) {
+    const currentAssignment = await DormitoryAssignment.findOne({
+      studentId: student._id,
+      status: 'confirmed',
+    });
+
+    if (!currentAssignment) {
+      throw new AppError('您当前没有入住记录，无法申请调宿', 400);
+    }
+
+    const pendingRequest = await TransferRequest.findOne({
+      studentId: student._id,
+      status: 'pending',
+    });
+
+    if (pendingRequest) {
+      throw new AppError('您已有待审核的调宿申请，请先处理', 400);
+    }
+
+    const request = await TransferRequest.create({
+      studentId: student._id,
+      currentAssignmentId: currentAssignment._id,
+      currentBedId: currentAssignment.bedId,
+      currentDormitoryId: currentAssignment.dormitoryId,
+      currentBuildingId: currentAssignment.buildingId,
+      reason: data.reason,
+      preferredBuildingId: data.preferredBuildingId,
+      preferredDormitoryId: data.preferredDormitoryId,
+      preferredBedId: data.preferredBedId,
+      additionalNotes: data.additionalNotes,
+      status: 'pending',
+    });
+
+    const building = await Building.findById(currentAssignment.buildingId);
+    if (building && building.managerId) {
+      await NotificationService.sendToDormManager(
+        building.managerId,
+        'dorm_change',
+        '新调宿申请',
+        `${student.realName} 申请调宿，请及时审核`,
+        request._id,
+        'TransferRequest'
+      );
+    }
+
+    if (student.studentInfo && student.studentInfo.counselorId) {
+      await NotificationService.sendToCounselor(
+        student.studentInfo.counselorId,
+        'dorm_change',
+        '新调宿申请',
+        `${student.realName} 申请调宿，请及时审核`,
+        request._id,
+        'TransferRequest'
+      );
+    }
+
+    return await TransferRequest.findById(request._id)
+      .populate('currentBedId')
+      .populate('currentDormitoryId')
+      .populate('currentBuildingId', 'name')
+      .populate('preferredBuildingId', 'name')
+      .populate('preferredDormitoryId', 'roomNumber')
+      .populate('preferredBedId', 'bedNumber');
+  }
+
+  static async getTransferRequests(studentId, role, status) {
+    let query = {};
+
+    if (role === 'student') {
+      query.studentId = studentId;
+    } else if (role === 'dorm_manager') {
+    }
+
+    if (status) {
+      query.status = status;
+    }
+
+    return await TransferRequest.find(query)
+      .sort({ createdAt: -1 })
+      .populate('studentId', 'realName phone studentId')
+      .populate('currentBedId', 'bedNumber')
+      .populate('currentDormitoryId', 'roomNumber')
+      .populate('currentBuildingId', 'name')
+      .populate('targetBedId', 'bedNumber')
+      .populate('targetDormitoryId', 'roomNumber')
+      .populate('targetBuildingId', 'name')
+      .populate('reviewedBy', 'realName');
+  }
+
+  static async reviewTransferRequest(reviewer, requestId, action, data = {}) {
+    const request = await TransferRequest.findById(requestId)
+      .populate('studentId')
+      .populate('currentDormitoryId');
+
+    if (!request) {
+      throw new AppError('调宿申请不存在', 404);
+    }
+
+    if (request.status !== 'pending') {
+      throw new AppError('该申请已处理', 400);
+    }
+
+    if (action === 'reject') {
+      await TransferRequest.findByIdAndUpdate(requestId, {
+        status: 'rejected',
+        reviewedBy: reviewer._id,
+        reviewedAt: Date.now(),
+        reviewNotes: data.reviewNotes,
+      });
+
+      await NotificationService.sendToStudent(
+        request.studentId._id,
+        'dorm_change',
+        '调宿申请被拒绝',
+        `您的调宿申请已被拒绝，原因：${data.reviewNotes || '不符合调宿条件'}`,
+        request._id,
+        'TransferRequest'
+      );
+
+      return await TransferRequest.findById(requestId);
+    }
+
+    if (action === 'approve') {
+      let targetBedId = data.targetBedId || request.preferredBedId;
+
+      if (!targetBedId) {
+        const recommendations = await this.getAvailableBedsRecommendation(request.studentId, 3);
+        if (recommendations.length > 0) {
+          targetBedId = recommendations[0]._id;
+        } else {
+          throw new AppError('暂无可用床位，请稍后再试', 400);
+        }
+      }
+
+      const targetBed = await Bed.findById(targetBedId).populate('dormitoryId').populate('buildingId');
+      if (!targetBed || targetBed.status !== 'available') {
+        throw new AppError('目标床位不可用', 400);
+      }
+
+      const lockedBed = await Bed.findOneAndUpdate(
+        { _id: targetBedId, status: 'available' },
+        {
+          $set: {
+            status: 'occupied',
+            studentId: request.studentId._id,
+            assignedAt: Date.now(),
+          },
+        },
+        { new: true }
+      );
+
+      if (!lockedBed) {
+        throw new AppError('目标床位已被占用，请选择其他床位', 400);
+      }
+
+      await Bed.findByIdAndUpdate(request.currentBedId, {
+        status: 'available',
+        studentId: null,
+        assignedAt: null,
+      });
+
+      await Dormitory.findByIdAndUpdate(request.currentDormitoryId, {
+        $inc: { occupiedCount: -1 },
+      });
+
+      await Dormitory.findByIdAndUpdate(targetBed.dormitoryId, {
+        $inc: { occupiedCount: 1 },
+      });
+
+      await DormitoryAssignment.findByIdAndUpdate(request.currentAssignmentId, {
+        status: 'moved_out',
+        movedOutAt: Date.now(),
+      });
+
+      const newAssignment = await DormitoryAssignment.create({
+        studentId: request.studentId._id,
+        bedId: targetBedId,
+        dormitoryId: targetBed.dormitoryId,
+        buildingId: targetBed.buildingId,
+        assignmentType: 'transfer',
+        previousAssignmentId: request.currentAssignmentId,
+        status: 'confirmed',
+        confirmedAt: Date.now(),
+      });
+
+      await TransferRequest.findByIdAndUpdate(requestId, {
+        status: 'completed',
+        reviewedBy: reviewer._id,
+        reviewedAt: Date.now(),
+        reviewNotes: data.reviewNotes,
+        targetBedId,
+        targetDormitoryId: targetBed.dormitoryId,
+        targetBuildingId: targetBed.buildingId,
+        newAssignmentId: newAssignment._id,
+        completedAt: Date.now(),
+      });
+
+      await NotificationService.sendToStudent(
+        request.studentId._id,
+        'dorm_change',
+        '调宿申请已通过',
+        `您已成功调至${targetBed.buildingId.name}${targetBed.dormitoryId.roomNumber}房间${targetBed.bedNumber}床位`,
+        newAssignment._id,
+        'DormitoryAssignment'
+      );
+
+      return await TransferRequest.findById(requestId)
+        .populate('targetBedId')
+        .populate('targetDormitoryId')
+        .populate('targetBuildingId');
+    }
+
+    throw new AppError('无效的操作类型', 400);
+  }
+
+  static async checkOutDormitory(student, reason) {
+    const currentAssignment = await DormitoryAssignment.findOne({
+      studentId: student._id,
+      status: 'confirmed',
+    }).populate('dormitoryId').populate('buildingId');
+
+    if (!currentAssignment) {
+      throw new AppError('您当前没有入住记录', 400);
+    }
+
+    await Bed.findByIdAndUpdate(currentAssignment.bedId, {
+      status: 'available',
+      studentId: null,
+      assignedAt: null,
+    });
+
+    await Dormitory.findByIdAndUpdate(currentAssignment.dormitoryId, {
+      $inc: { occupiedCount: -1 },
+    });
+
+    await DormitoryAssignment.findByIdAndUpdate(currentAssignment._id, {
+      status: 'moved_out',
+      movedOutAt: Date.now(),
+      assignmentType: 'check_out',
+    });
+
+    await NotificationService.sendToStudent(
+      student._id,
+      'dorm_change',
+      '退宿成功',
+      `您已成功办理退宿，感谢您的入住`,
+      currentAssignment._id,
+      'DormitoryAssignment'
+    );
+
+    return {
+      success: true,
+      message: '退宿成功',
+      previousAssignment: currentAssignment,
+    };
+  }
+
+  static async cancelTransferRequest(student, requestId) {
+    const request = await TransferRequest.findById(requestId);
+
+    if (!request) {
+      throw new AppError('调宿申请不存在', 404);
+    }
+
+    if (request.studentId.toString() !== student._id.toString()) {
+      throw new AppError('无权取消此申请', 403);
+    }
+
+    if (request.status !== 'pending') {
+      throw new AppError('该申请已处理，无法取消', 400);
+    }
+
+    await TransferRequest.findByIdAndUpdate(requestId, {
+      status: 'cancelled',
+    });
+
+    return await TransferRequest.findById(requestId);
   }
 }
 

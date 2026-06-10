@@ -82,7 +82,69 @@ class NotificationService {
     return Notification.countDocuments({ recipientId: userId, isRead: false });
   }
 
-  static async markAsRead(notificationId) {
+  static async getUnreadStats(userId) {
+    const stats = await Notification.aggregate([
+      {
+        $match: {
+          recipientId: userId,
+          isRead: false,
+        },
+      },
+      {
+        $group: {
+          _id: '$type',
+          count: { $sum: 1 },
+        },
+      },
+    ]);
+
+    const typeMap = {
+      dorm_assignment: 0,
+      dorm_change: 0,
+      repair_created: 0,
+      repair_assigned: 0,
+      repair_completed: 0,
+      repair_escalated: 0,
+      electricity_warning: 0,
+      electricity_recharged: 0,
+      electricity_cutoff: 0,
+      electricity_restored: 0,
+      visitor_pending: 0,
+      visitor_approved: 0,
+      visitor_overdue: 0,
+      late_return: 0,
+      late_return_violation: 0,
+      late_return_interview: 0,
+      hygiene_inspection: 0,
+      hygiene_warning: 0,
+      system: 0,
+      other: 0,
+    };
+
+    for (const stat of stats) {
+      if (typeMap[stat._id] !== undefined) {
+        typeMap[stat._id] = stat.count;
+      }
+    }
+
+    const total = Object.values(typeMap).reduce((sum, count) => sum + count, 0);
+
+    return {
+      total,
+      ...typeMap,
+    };
+  }
+
+  static async markAsRead(notificationId, userId) {
+    const notification = await Notification.findById(notificationId);
+    if (!notification) {
+      return null;
+    }
+
+    if (notification.recipientId.toString() !== userId.toString()) {
+      throw new Error('无权操作此通知');
+    }
+
     return Notification.findByIdAndUpdate(
       notificationId,
       { isRead: true, readAt: Date.now() },

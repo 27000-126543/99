@@ -1,4 +1,5 @@
 const User = require('../models/User');
+const Notification = require('../models/Notification');
 const NotificationService = require('../services/notificationService');
 
 exports.register = async (req, res, next) => {
@@ -121,12 +122,24 @@ exports.changePassword = async (req, res, next) => {
 
 exports.getNotifications = async (req, res, next) => {
   try {
-    const { page = 1, limit = 20, isRead } = req.query;
+    const { page = 1, limit = 20, isRead, type, startDate, endDate } = req.query;
     const skip = (page - 1) * limit;
 
     const query = { recipientId: req.user._id };
     if (isRead !== undefined) {
       query.isRead = isRead === 'true';
+    }
+    if (type) {
+      query.type = type;
+    }
+    if (startDate || endDate) {
+      query.createdAt = {};
+      if (startDate) {
+        query.createdAt.$gte = new Date(startDate);
+      }
+      if (endDate) {
+        query.createdAt.$lte = new Date(endDate);
+      }
     }
 
     const notifications = await Notification.find(query)
@@ -136,6 +149,7 @@ exports.getNotifications = async (req, res, next) => {
 
     const total = await Notification.countDocuments(query);
     const unreadCount = await NotificationService.getUnreadCount(req.user._id);
+    const unreadStats = await NotificationService.getUnreadStats(req.user._id);
 
     res.json({
       success: true,
@@ -143,6 +157,7 @@ exports.getNotifications = async (req, res, next) => {
         notifications,
         total,
         unreadCount,
+        unreadStats,
         page: parseInt(page),
         limit: parseInt(limit),
       },
@@ -152,16 +167,42 @@ exports.getNotifications = async (req, res, next) => {
   }
 };
 
+exports.getUnreadStats = async (req, res, next) => {
+  try {
+    const unreadStats = await NotificationService.getUnreadStats(req.user._id);
+
+    res.json({
+      success: true,
+      data: unreadStats,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 exports.markNotificationRead = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const notification = await NotificationService.markAsRead(id);
+    const notification = await NotificationService.markAsRead(id, req.user._id);
+
+    if (!notification) {
+      return res.status(404).json({
+        success: false,
+        message: '通知不存在',
+      });
+    }
 
     res.json({
       success: true,
       data: notification,
     });
   } catch (error) {
+    if (error.message === '无权操作此通知') {
+      return res.status(403).json({
+        success: false,
+        message: error.message,
+      });
+    }
     next(error);
   }
 };

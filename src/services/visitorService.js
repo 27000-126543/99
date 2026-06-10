@@ -18,6 +18,7 @@ class VisitorService {
       throw new AppError('楼栋不存在', 404);
     }
 
+    const now = moment();
     const maxVisitors = building.maxVisitors || parseInt(process.env.MAX_VISITORS_PER_BUILDING) || 20;
     const startOfDay = moment(date).startOf('day').toDate();
     const endOfDay = moment(date).endOf('day').toDate();
@@ -38,7 +39,7 @@ class VisitorService {
 
     while (currentTime.isBefore(endTime)) {
       const slotStart = currentTime.toDate();
-      const slotEnd = currentTime.add(slotDuration, 'minutes').toDate();
+      const slotEnd = currentTime.clone().add(slotDuration, 'minutes').toDate();
 
       const slotVisitors = await Visitor.countDocuments({
         buildingId,
@@ -47,19 +48,52 @@ class VisitorService {
         scheduledEndTime: { $gt: slotStart },
       });
 
+      const isPast = currentTime.isBefore(now);
+
       slots.push({
         startTime: slotStart,
         endTime: slotEnd,
-        available: slotVisitors < maxVisitors,
+        available: slotVisitors < maxVisitors && !isPast,
         remaining: maxVisitors - slotVisitors,
+        isPast,
       });
+
+      currentTime = currentTime.add(slotDuration, 'minutes');
     }
+
+    const availableSlots = slots.filter((s) => s.available).sort((a, b) => {
+      const diffA = a.startTime.getTime() - now.valueOf();
+      const diffB = b.startTime.getTime() - now.valueOf();
+      return diffA - diffB;
+    });
 
     return {
       maxVisitors,
       currentVisitors,
       slots,
+      availableSlots,
+      date,
     };
+  }
+
+  static async getNextAvailableSlot(buildingId) {
+    const now = moment();
+    let checkDate = now.clone().startOf('day');
+    const maxDaysToCheck = 7;
+
+    for (let i = 0; i < maxDaysToCheck; i++) {
+      const slotData = await this.getAvailableTimeSlots(buildingId, checkDate.toDate());
+      if (slotData.availableSlots.length > 0) {
+        return {
+          date: checkDate.toDate(),
+          slot: slotData.availableSlots[0],
+          slotData,
+        };
+      }
+      checkDate = checkDate.add(1, 'days');
+    }
+
+    return null;
   }
 
   static async getCurrentVisitorCount(buildingId) {
@@ -88,17 +122,35 @@ class VisitorService {
       throw new AppError('楼栋不存在', 404);
     }
 
-    const startTime = new Date(data.scheduledStartTime);
-    const endTime = new Date(data.scheduledEndTime);
+    let startTime, endTime;
+    const hasSpecifiedTime = data.scheduledStartTime && data.scheduledEndTime;
 
-    if (startTime >= endTime) {
-      throw new AppError('结束时间必须晚于开始时间', 400);
-    }
+    if (hasSpecifiedTime) {
+      startTime = new Date(data.scheduledStartTime);
+      endTime = new Date(data.scheduledEndTime);
 
-    const durationMinutes = (endTime - startTime) / 60000;
-    const maxDuration = parseInt(process.env.VISITOR_PASS_DURATION_MINUTES) || 120;
-    if (durationMinutes > maxDuration) {
-      throw new AppError(`访问时长不能超过${maxDuration}分钟`, 400);
+      if (startTime >= endTime) {
+        throw new AppError('结束时间必须晚于开始时间', 400);
+      }
+
+      const durationMinutes = (endTime - startTime) / 60000;
+      const maxDuration = parseInt(process.env.VISITOR_PASS_DURATION_MINUTES) || 120;
+      if (durationMinutes > maxDuration) {
+        throw new AppError(`访问时长不能超过${maxDuration}分钟`, 400);
+      }
+    } else {
+      const nextAvailable = await this.getNextAvailableSlot(buildingId);
+      if (!nextAvailable) {
+        throw new AppError('未来7天内暂无可用时段，请稍后再试', 400);
+      }
+
+      const bestSlot = nextAvailable.slot;
+      startTime = bestSlot.startTime;
+      const defaultDuration = Math.min(
+        parseInt(process.env.VISITOR_PASS_DURATION_MINUTES) || 60,
+        (bestSlot.endTime - bestSlot.startTime) / 60000
+      );
+      endTime = new Date(startTime.getTime() + defaultDuration * 60000);
     }
 
     const slotStart = moment(startTime).startOf('hour').toDate();
@@ -114,7 +166,11 @@ class VisitorService {
     const maxVisitors = building.maxVisitors || parseInt(process.env.MAX_VISITORS_PER_BUILDING) || 20;
     if (slotVisitors >= maxVisitors) {
       const availableSlots = await this.getAvailableTimeSlots(buildingId, startTime);
-      throw new AppError('该时段访客已满，请选择其他时段', 400, { availableSlots });
+      return {
+        success: false,
+        message: '该时段访客已满，请选择其他时段',
+        availableSlots: availableSlots.availableSlots,
+      };
     }
 
     const visitor = await Visitor.create({
@@ -142,9 +198,16 @@ class VisitorService {
       );
     }
 
-    return await Visitor.findById(visitor._id)
+    const result = await Visitor.findById(visitor._id)
       .populate('hostStudentId', 'realName phone')
       .populate('buildingId', 'name');
+
+    return {
+      success: true,
+      autoSelectedTime: !hasSpecifiedTime,
+      autoSelectedDate: !hasSpecifiedTime ? moment(startTime).format('YYYY-MM-DD') : null,
+      data: result,
+    };
   }
 
   static async approveVisitor(manager, visitorId) {

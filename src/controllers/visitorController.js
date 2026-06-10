@@ -2,11 +2,21 @@ const VisitorService = require('../services/visitorService');
 
 exports.createRequest = async (req, res, next) => {
   try {
-    const visitor = await VisitorService.createVisitorRequest(req.user, req.body);
+    const result = await VisitorService.createVisitorRequest(req.user, req.body);
+
+    if (result.success === false) {
+      return res.status(400).json({
+        success: false,
+        message: result.message,
+        availableSlots: result.availableSlots,
+      });
+    }
 
     res.status(201).json({
       success: true,
-      data: visitor,
+      autoSelectedTime: result.autoSelectedTime,
+      autoSelectedDate: result.autoSelectedDate,
+      data: result.data,
     });
   } catch (error) {
     next(error);
@@ -15,11 +25,23 @@ exports.createRequest = async (req, res, next) => {
 
 exports.getAvailableTimeSlots = async (req, res, next) => {
   try {
-    const { buildingId, date } = req.query;
-    const slots = await VisitorService.getAvailableTimeSlots(
-      buildingId,
-      date ? new Date(date) : new Date()
-    );
+    const { buildingId, date, autoFindNext } = req.query;
+    const queryDate = date ? new Date(date) : new Date();
+    let slots = await VisitorService.getAvailableTimeSlots(buildingId, queryDate);
+
+    if (autoFindNext === 'true' && slots.availableSlots.length === 0) {
+      const nextAvailable = await VisitorService.getNextAvailableSlot(buildingId);
+      if (nextAvailable) {
+        return res.json({
+          success: true,
+          data: {
+            ...nextAvailable.slotData,
+            nextAvailableDate: nextAvailable.date,
+            nextAvailableSlot: nextAvailable.slot,
+          },
+        });
+      }
+    }
 
     res.json({
       success: true,

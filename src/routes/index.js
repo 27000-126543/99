@@ -20,11 +20,13 @@ router.get('/auth/me', authController.getMe);
 router.put('/auth/profile', authController.updateProfile);
 router.put('/auth/password', authController.changePassword);
 router.get('/auth/notifications', authController.getNotifications);
+router.get('/auth/notifications/unread-stats', authController.getUnreadStats);
 router.put('/auth/notifications/:id/read', authController.markNotificationRead);
 router.put('/auth/notifications/read-all', authController.markAllNotificationsRead);
 router.get('/auth/users/:role', roleMiddleware('admin'), authController.getUsersByRole);
 
 router.get('/dormitory/assignments/me', roleMiddleware('student'), dormitoryController.getMyAssignment);
+router.get('/dormitory/assignments/history', roleMiddleware('student'), dormitoryController.getAssignmentHistory);
 router.get('/dormitory/available', roleMiddleware('student'), dormitoryController.getAvailableDormitories);
 router.get('/dormitory/recommendations', roleMiddleware('student'), dormitoryController.getRecommendations);
 router.post('/dormitory/auto-assign', roleMiddleware('student'), dormitoryController.autoAssign);
@@ -33,6 +35,13 @@ router.get('/dormitory/buildings', dormitoryController.getBuildingList);
 router.get('/dormitory/rooms', dormitoryController.getDormitoryList);
 router.post('/dormitory/buildings', roleMiddleware('admin'), dormitoryController.createBuilding);
 router.post('/dormitory/rooms', roleMiddleware('admin'), dormitoryController.createDormitory);
+
+router.post('/dormitory/transfer', roleMiddleware('student'), dormitoryController.createTransferRequest);
+router.get('/dormitory/transfer', dormitoryController.getTransferRequests);
+router.put('/dormitory/transfer/:id/approve', roleMiddleware('counselor', 'dorm_manager', 'admin'), dormitoryController.approveTransferRequest);
+router.put('/dormitory/transfer/:id/reject', roleMiddleware('counselor', 'dorm_manager', 'admin'), dormitoryController.rejectTransferRequest);
+router.put('/dormitory/transfer/:id/cancel', roleMiddleware('student'), dormitoryController.cancelTransferRequest);
+router.post('/dormitory/checkout', roleMiddleware('student'), dormitoryController.checkOutDormitory);
 
 router.post('/repair/orders', roleMiddleware('student'), repairController.createOrder);
 router.get('/repair/orders', repairController.getMyOrders);
@@ -78,9 +87,10 @@ router.get('/hygiene/me', roleMiddleware('student'), hygieneController.getMyDorm
 router.get('/hygiene/building', hygieneController.getBuildingInspections);
 router.put('/hygiene/dormitories/:id/unlock', roleMiddleware('admin', 'counselor'), hygieneController.unlockDormitorySelection);
 
-router.post('/reports/daily', roleMiddleware('admin'), reportController.generateDailyReport);
-router.post('/reports/building', roleMiddleware('admin'), reportController.generateBuildingReport);
+router.get('/reports/generate/daily', roleMiddleware('admin'), reportController.generateDailyReport);
+router.get('/reports/generate/building', roleMiddleware('admin'), reportController.generateBuildingReport);
 router.get('/reports', reportController.getReports);
+router.get('/reports/comparison', reportController.getBuildingComparison);
 router.get('/reports/export', reportController.exportReport);
 router.get('/reports/dashboard', reportController.getDashboardData);
 

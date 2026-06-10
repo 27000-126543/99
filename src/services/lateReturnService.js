@@ -42,8 +42,8 @@ class LateReturnService {
       createdAt: { $gte: startOfMonth, $lte: endOfMonth },
     }) + 1;
 
-    const notifyCount = parseInt(process.env.LATE_RETURN_NOTIFY_COUNT) || 3;
-    const interviewCount = parseInt(process.env.LATE_RETURN_INTERVIEW_COUNT) || 5;
+    const notifyCounselorAt = 4;
+    const interviewAt = 5;
 
     const lateReturn = await LateReturn.create({
       studentId,
@@ -63,7 +63,7 @@ class LateReturnService {
     if (assignment && assignment.studentId && assignment.studentId.studentInfo) {
       const counselorId = assignment.studentId.studentInfo.counselorId;
 
-      if (countInMonth >= notifyCount && !lateReturn.counselorNotified && counselorId) {
+      if (countInMonth === notifyCounselorAt && counselorId) {
         await LateReturn.findByIdAndUpdate(lateReturn._id, {
           counselorNotified: true,
           status: 'notified',
@@ -79,7 +79,7 @@ class LateReturnService {
         );
       }
 
-      if (countInMonth >= interviewCount && !lateReturn.interviewTriggered && counselorId) {
+      if (countInMonth === interviewAt && counselorId) {
         await LateReturn.findByIdAndUpdate(lateReturn._id, {
           interviewTriggered: true,
         });

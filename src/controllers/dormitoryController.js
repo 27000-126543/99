@@ -31,6 +31,14 @@ exports.selectBed = async (req, res, next) => {
     const { bedId } = req.body;
     const result = await DormitoryService.selectBed(req.user, bedId);
 
+    if (result.success === false) {
+      return res.status(400).json({
+        success: false,
+        message: result.message,
+        recommendations: result.recommendations,
+      });
+    }
+
     res.json({
       success: true,
       data: result,
@@ -140,6 +148,113 @@ exports.createDormitory = async (req, res, next) => {
     res.status(201).json({
       success: true,
       data: dormitory,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.getAssignmentHistory = async (req, res, next) => {
+  try {
+    const history = await DormitoryService.getAssignmentHistory(req.user._id);
+
+    res.json({
+      success: true,
+      data: history,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.createTransferRequest = async (req, res, next) => {
+  try {
+    const request = await DormitoryService.createTransferRequest(req.user, req.body);
+
+    res.status(201).json({
+      success: true,
+      data: request,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.getTransferRequests = async (req, res, next) => {
+  try {
+    const { status } = req.query;
+    const requests = await DormitoryService.getTransferRequests(
+      req.user._id,
+      req.user.role,
+      status
+    );
+
+    res.json({
+      success: true,
+      data: requests,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.approveTransferRequest = async (req, res, next) => {
+  try {
+    const request = await DormitoryService.reviewTransferRequest(
+      req.user,
+      req.params.id,
+      'approve',
+      req.body
+    );
+
+    res.json({
+      success: true,
+      data: request,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.rejectTransferRequest = async (req, res, next) => {
+  try {
+    const request = await DormitoryService.reviewTransferRequest(
+      req.user,
+      req.params.id,
+      'reject',
+      req.body
+    );
+
+    res.json({
+      success: true,
+      data: request,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.cancelTransferRequest = async (req, res, next) => {
+  try {
+    const request = await DormitoryService.cancelTransferRequest(req.user, req.params.id);
+
+    res.json({
+      success: true,
+      data: request,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.checkOutDormitory = async (req, res, next) => {
+  try {
+    const { reason } = req.body;
+    const result = await DormitoryService.checkOutDormitory(req.user, reason);
+
+    res.json({
+      success: true,
+      data: result,
     });
   } catch (error) {
     next(error);
