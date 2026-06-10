@@ -67,6 +67,53 @@ exports.getBuildingComparison = async (req, res, next) => {
   }
 };
 
+exports.getTrendAnalysis = async (req, res, next) => {
+  try {
+    const { buildingIds, startDate, endDate, interval, gender } = req.query;
+    let buildingIdsArray = buildingIds;
+    if (buildingIds && typeof buildingIds === 'string') {
+      buildingIdsArray = buildingIds.split(',').map((id) => id.trim());
+    }
+
+    const data = await ReportService.getTrendAnalysis({
+      buildingIds: buildingIdsArray,
+      startDate,
+      endDate,
+      interval,
+      gender,
+    });
+
+    res.json({
+      success: true,
+      data,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.getRiskWarnings = async (req, res, next) => {
+  try {
+    const { buildingIds, gender } = req.query;
+    let buildingIdsArray = buildingIds;
+    if (buildingIds && typeof buildingIds === 'string') {
+      buildingIdsArray = buildingIds.split(',').map((id) => id.trim());
+    }
+
+    const data = await ReportService.getRiskWarnings({
+      buildingIds: buildingIdsArray,
+      gender,
+    });
+
+    res.json({
+      success: true,
+      data,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 exports.exportReport = async (req, res, next) => {
   try {
     const { buildingId, buildingIds, startDate, endDate, format } = req.query;

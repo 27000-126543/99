@@ -23,6 +23,8 @@ router.get('/auth/notifications', authController.getNotifications);
 router.get('/auth/notifications/unread-stats', authController.getUnreadStats);
 router.put('/auth/notifications/:id/read', authController.markNotificationRead);
 router.put('/auth/notifications/read-all', authController.markAllNotificationsRead);
+router.put('/auth/notifications/read-category', authController.markCategoryAsRead);
+router.put('/auth/notifications/read-types', authController.markTypesAsRead);
 router.get('/auth/users/:role', roleMiddleware('admin'), authController.getUsersByRole);
 
 router.get('/dormitory/assignments/me', roleMiddleware('student'), dormitoryController.getMyAssignment);
@@ -91,6 +93,8 @@ router.get('/reports/generate/daily', roleMiddleware('admin'), reportController.
 router.get('/reports/generate/building', roleMiddleware('admin'), reportController.generateBuildingReport);
 router.get('/reports', reportController.getReports);
 router.get('/reports/comparison', reportController.getBuildingComparison);
+router.get('/reports/trend', reportController.getTrendAnalysis);
+router.get('/reports/risk-warnings', roleMiddleware('dorm_manager', 'counselor', 'admin'), reportController.getRiskWarnings);
 router.get('/reports/export', reportController.exportReport);
 router.get('/reports/dashboard', reportController.getDashboardData);
 

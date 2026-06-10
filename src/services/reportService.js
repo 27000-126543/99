@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const OperationReport = require('../models/OperationReport');
 const Bed = require('../models/Bed');
+const Dormitory = require('../models/Dormitory');
 const RepairOrder = require('../models/RepairOrder');
 const LateReturn = require('../models/LateReturn');
 const ElectricityTransaction = require('../models/ElectricityTransaction');
@@ -301,8 +302,10 @@ class ReportService {
 
     if (validBuildingIds.length > 0) {
       targetBuildings = buildings.filter((b) => validBuildingIds.includes(b._id.toString()));
-      if (targetBuildings.length === 0) {
-        throw new AppError('未找到匹配的楼栋', 400);
+      const foundIds = targetBuildings.map((b) => b._id.toString());
+      const notFoundIds = validBuildingIds.filter((id) => !foundIds.includes(id));
+      if (notFoundIds.length > 0) {
+        throw new AppError(`以下楼栋ID不存在: ${notFoundIds.join(', ')}`, 400);
       }
     }
 
@@ -608,6 +611,343 @@ class ReportService {
       todayLateReturns,
       todayVisitors,
       pendingHygiene,
+    };
+  }
+
+  static async validateBuildingIds(buildingIds, gender) {
+    let validBuildingIds = [];
+    let invalidIds = [];
+
+    if (buildingIds && buildingIds.length > 0) {
+      for (const id of buildingIds) {
+        if (mongoose.Types.ObjectId.isValid(id)) {
+          validBuildingIds.push(id);
+        } else {
+          invalidIds.push(id);
+        }
+      }
+      if (invalidIds.length > 0) {
+        throw new AppError(`无效的楼栋ID: ${invalidIds.join(', ')}`, 400);
+      }
+    }
+
+    let buildings = await Building.find({}).select('_id name code gender');
+
+    if (gender && ['male', 'female', 'mixed'].includes(gender)) {
+      buildings = buildings.filter((b) => b.gender === gender);
+    }
+
+    if (validBuildingIds.length > 0) {
+      const target = buildings.filter((b) => validBuildingIds.includes(b._id.toString()));
+      const foundIds = target.map((b) => b._id.toString());
+      const notFoundIds = validBuildingIds.filter((id) => !foundIds.includes(id));
+      if (notFoundIds.length > 0) {
+        throw new AppError(`以下楼栋ID不存在: ${notFoundIds.join(', ')}`, 400);
+      }
+      return { targetBuildings: target, buildingObjectIds: validBuildingIds.map((id) => new mongoose.Types.ObjectId(id)) };
+    }
+
+    return {
+      targetBuildings: buildings,
+      buildingObjectIds: buildings.map((b) => b._id),
+    };
+  }
+
+  static async getTrendAnalysis(params) {
+    const { buildingIds, startDate, endDate, interval = 'weekly', gender } = params;
+
+    if (!startDate || !endDate) {
+      throw new AppError('请提供开始日期和结束日期', 400);
+    }
+
+    const start = moment(startDate);
+    const end = moment(endDate);
+
+    if (!start.isValid() || !end.isValid()) {
+      throw new AppError('日期格式不正确，请使用 YYYY-MM-DD 格式', 400);
+    }
+
+    if (!['weekly', 'monthly'].includes(interval)) {
+      throw new AppError('interval 参数只支持 weekly 或 monthly', 400);
+    }
+
+    const { targetBuildings, buildingObjectIds } = await this.validateBuildingIds(buildingIds, gender);
+
+    if (targetBuildings.length === 0) {
+      throw new AppError('未找到匹配的楼栋', 400);
+    }
+
+    const startDateObj = start.startOf('day').toDate();
+    const endDateObj = end.endOf('day').toDate();
+
+    const reports = await OperationReport.aggregate([
+      {
+        $match: {
+          reportDate: { $gte: startDateObj, $lte: endDateObj },
+          reportType: 'building_daily',
+          buildingId: { $in: buildingObjectIds },
+        },
+      },
+      {
+        $sort: { reportDate: 1 },
+      },
+    ]);
+
+    const periods = [];
+    let current = start.clone();
+
+    if (interval === 'weekly') {
+      current = current.startOf('week');
+      while (current.isBefore(end)) {
+        const periodStart = current.clone();
+        const periodEnd = current.clone().endOf('week');
+        periods.push({
+          label: `${periodStart.format('MM/DD')}-${periodEnd.format('MM/DD')}`,
+          start: periodStart.toDate(),
+          end: periodEnd.toDate(),
+        });
+        current = current.add(1, 'weeks');
+      }
+    } else {
+      current = current.startOf('month');
+      while (current.isBefore(end)) {
+        const periodStart = current.clone();
+        const periodEnd = current.clone().endOf('month');
+        periods.push({
+          label: periodStart.format('YYYY-MM'),
+          start: periodStart.toDate(),
+          end: periodEnd.toDate(),
+        });
+        current = current.add(1, 'months');
+      }
+    }
+
+    const trendData = periods.map((period) => {
+      const periodReports = reports.filter(
+        (r) => r.reportDate >= period.start && r.reportDate <= period.end
+      );
+
+      const occupancyRate = periodReports.length > 0
+        ? Math.round(periodReports.reduce((sum, r) => sum + (r.statistics.occupancyRate || 0), 0) / periodReports.length * 100) / 100
+        : null;
+
+      const repairTotal = periodReports.reduce((sum, r) => sum + (r.statistics.repairTotal || 0), 0);
+      const repairCompleted = periodReports.reduce((sum, r) => sum + (r.statistics.repairCompleted || 0), 0);
+      const electricityRecharge = Math.round(periodReports.reduce((sum, r) => sum + (r.statistics.electricityTotalRecharge || 0), 0) * 100) / 100;
+      const electricityConsumption = Math.round(periodReports.reduce((sum, r) => sum + (r.statistics.electricityTotalConsumption || 0), 0) * 100) / 100;
+      const lateReturnCount = periodReports.reduce((sum, r) => sum + (r.statistics.lateReturnCount || 0), 0);
+      const hygieneTotal = periodReports.reduce((sum, r) => sum + (r.statistics.hygieneTotal || 0), 0);
+      const hygienePassed = periodReports.reduce((sum, r) => sum + (r.statistics.hygienePassed || 0), 0);
+      const hygienePassRate = hygieneTotal > 0
+        ? Math.round(hygienePassed / hygieneTotal * 10000) / 100
+        : null;
+
+      return {
+        period: period.label,
+        occupancyRate,
+        repairTotal,
+        repairCompleted,
+        repairCompletionRate: repairTotal > 0 ? Math.round(repairCompleted / repairTotal * 10000) / 100 : null,
+        electricityRecharge,
+        electricityConsumption,
+        lateReturnCount,
+        hygieneTotal,
+        hygienePassed,
+        hygienePassRate,
+        reportCount: periodReports.length,
+      };
+    });
+
+    return {
+      interval,
+      startDate: startDateObj,
+      endDate: endDateObj,
+      buildingCount: targetBuildings.length,
+      buildings: targetBuildings.map((b) => ({ id: b._id, name: b.name, code: b.code, gender: b.gender })),
+      trend: trendData,
+    };
+  }
+
+  static async getRiskWarnings(params) {
+    const { buildingIds, gender } = params;
+
+    const { targetBuildings, buildingObjectIds } = await this.validateBuildingIds(buildingIds, gender);
+
+    if (targetBuildings.length === 0) {
+      throw new AppError('未找到匹配的楼栋', 400);
+    }
+
+    const warnings = [];
+    const thirtyDaysAgo = moment().subtract(30, 'days').toDate();
+    const sevenDaysAgo = moment().subtract(7, 'days').toDate();
+    const now = new Date();
+
+    for (const building of targetBuildings) {
+      const buildingId = building._id;
+      const dormitories = await Dormitory.find({ buildingId });
+      const dormitoryIds = dormitories.map((d) => d._id);
+
+      const totalBeds = await Bed.countDocuments({ buildingId });
+      const occupiedBeds = await Bed.countDocuments({ buildingId, status: 'occupied' });
+      const occupancyRate = totalBeds > 0 ? Math.round(occupiedBeds / totalBeds * 10000) / 100 : 0;
+      const vacancyRate = totalBeds > 0 ? Math.round((totalBeds - occupiedBeds) / totalBeds * 10000) / 100 : 0;
+
+      if (vacancyRate >= 40) {
+        warnings.push({
+          level: 'high',
+          type: 'high_vacancy',
+          buildingId,
+          buildingName: building.name,
+          buildingCode: building.code,
+          buildingGender: building.gender,
+          reason: `空置率高达${vacancyRate}%`,
+          metrics: { totalBeds, occupiedBeds, vacancyRate, occupancyRate },
+        });
+      }
+
+      if (occupancyRate >= 95 && occupancyRate < 100) {
+        warnings.push({
+          level: 'medium',
+          type: 'near_full',
+          buildingId,
+          buildingName: building.name,
+          buildingCode: building.code,
+          buildingGender: building.gender,
+          reason: `入住率${occupancyRate}%，即将满员`,
+          metrics: { totalBeds, occupiedBeds, vacancyRate, occupancyRate, availableBeds: totalBeds - occupiedBeds },
+        });
+      }
+
+      const repairCount30d = await RepairOrder.countDocuments({
+        buildingId,
+        createdAt: { $gte: thirtyDaysAgo },
+      });
+      const repairPending = await RepairOrder.countDocuments({
+        buildingId,
+        status: { $in: ['pending', 'assigned', 'accepted'] },
+      });
+
+      if (repairCount30d >= 20) {
+        const completed30d = await RepairOrder.countDocuments({
+          buildingId,
+          completedAt: { $gte: thirtyDaysAgo },
+        });
+        warnings.push({
+          level: 'high',
+          type: 'repair_hotspot',
+          buildingId,
+          buildingName: building.name,
+          buildingCode: building.code,
+          buildingGender: building.gender,
+          reason: `近30天报修${repairCount30d}次，待处理${repairPending}单`,
+          metrics: { repairTotal30d: repairCount30d, repairCompleted30d: completed30d, repairPending },
+        });
+      }
+
+      const lateReturnCount30d = await LateReturn.countDocuments({
+        buildingId,
+        createdAt: { $gte: thirtyDaysAgo },
+      });
+
+      if (lateReturnCount30d >= 15) {
+        const distinctStudents = await LateReturn.distinct('studentId', {
+          buildingId,
+          createdAt: { $gte: thirtyDaysAgo },
+        });
+        warnings.push({
+          level: 'high',
+          type: 'late_return_hotspot',
+          buildingId,
+          buildingName: building.name,
+          buildingCode: building.code,
+          buildingGender: building.gender,
+          reason: `近30天晚归${lateReturnCount30d}次，涉及${distinctStudents.length}人`,
+          metrics: { lateReturnCount: lateReturnCount30d, distinctStudentCount: distinctStudents.length },
+        });
+      }
+
+      const failedHygieneDorms = await Dormitory.find({
+        buildingId,
+        consecutiveFailedInspections: { $gte: 2 },
+      });
+
+      if (failedHygieneDorms.length > 0) {
+        warnings.push({
+          level: 'high',
+          type: 'hygiene_failure',
+          buildingId,
+          buildingName: building.name,
+          buildingCode: building.code,
+          buildingGender: building.gender,
+          reason: `${failedHygieneDorms.length}间宿舍连续卫生不合格`,
+          metrics: {
+            failedDormCount: failedHygieneDorms.length,
+            failedDorms: failedHygieneDorms.map((d) => ({
+              dormitoryId: d._id,
+              roomNumber: d.roomNumber,
+              consecutiveFailures: d.consecutiveFailedInspections,
+              hygieneScore: d.hygieneScore,
+            })),
+          },
+        });
+      }
+
+      for (const dorm of dormitories) {
+        if (dorm.consecutiveFailedInspections >= 2) {
+          const existingDormWarning = warnings.find(
+            (w) => w.type === 'hygiene_failure_dorm' && w.dormitoryId && w.dormitoryId.toString() === dorm._id.toString()
+          );
+          if (!existingDormWarning) {
+            warnings.push({
+              level: 'medium',
+              type: 'hygiene_failure_dorm',
+              buildingId,
+              buildingName: building.name,
+              buildingCode: building.code,
+              dormitoryId: dorm._id,
+              roomNumber: dorm.roomNumber,
+              reason: `连续${dorm.consecutiveFailedInspections}次卫生不合格，卫生评分${dorm.hygieneScore}分`,
+              metrics: {
+                consecutiveFailures: dorm.consecutiveFailedInspections,
+                hygieneScore: dorm.hygieneScore,
+                selectionLocked: dorm.selectionLocked,
+              },
+            });
+          }
+        }
+      }
+
+      const overdueVisitors = await Visitor.countDocuments({
+        buildingId,
+        status: 'overdue',
+        scheduledEndTime: { $gte: sevenDaysAgo },
+      });
+
+      if (overdueVisitors >= 3) {
+        warnings.push({
+          level: 'medium',
+          type: 'visitor_overdue',
+          buildingId,
+          buildingName: building.name,
+          buildingCode: building.code,
+          buildingGender: building.gender,
+          reason: `近7天访客超时${overdueVisitors}次`,
+          metrics: { overdueVisitors7d: overdueVisitors },
+        });
+      }
+    }
+
+    warnings.sort((a, b) => {
+      const levelOrder = { high: 0, medium: 1, low: 2 };
+      return levelOrder[a.level] - levelOrder[b.level];
+    });
+
+    return {
+      totalWarnings: warnings.length,
+      highLevelCount: warnings.filter((w) => w.level === 'high').length,
+      mediumLevelCount: warnings.filter((w) => w.level === 'medium').length,
+      warnings,
+      buildingCount: targetBuildings.length,
     };
   }
 }

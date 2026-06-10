@@ -122,16 +122,32 @@ exports.changePassword = async (req, res, next) => {
 
 exports.getNotifications = async (req, res, next) => {
   try {
-    const { page = 1, limit = 20, isRead, type, startDate, endDate } = req.query;
+    const { page = 1, limit = 20, isRead, type, category, startDate, endDate } = req.query;
     const skip = (page - 1) * limit;
 
     const query = { recipientId: req.user._id };
     if (isRead !== undefined) {
       query.isRead = isRead === 'true';
     }
+
     if (type) {
       query.type = type;
+    } else if (category) {
+      const categoryTypeMap = {
+        repair: ['repair_created', 'repair_assigned', 'repair_completed', 'repair_escalated'],
+        electricity: ['electricity_warning', 'electricity_recharged', 'electricity_cutoff', 'electricity_restored'],
+        visitor: ['visitor_pending', 'visitor_approved', 'visitor_denied', 'visitor_overdue'],
+        late_return: ['late_return', 'late_return_violation', 'late_return_interview', 'interview_scheduled'],
+        hygiene: ['hygiene_inspection', 'hygiene_failed', 'hygiene_warning'],
+        dorm: ['dorm_assignment', 'dorm_change'],
+        system: ['system', 'report_ready'],
+      };
+      const types = categoryTypeMap[category];
+      if (types) {
+        query.type = { $in: types };
+      }
     }
+
     if (startDate || endDate) {
       query.createdAt = {};
       if (startDate) {
@@ -216,6 +232,60 @@ exports.markAllNotificationsRead = async (req, res, next) => {
       message: '已全部标记为已读',
     });
   } catch (error) {
+    next(error);
+  }
+};
+
+exports.markCategoryAsRead = async (req, res, next) => {
+  try {
+    const { category } = req.body;
+    if (!category) {
+      return res.status(400).json({
+        success: false,
+        message: '请提供通知大类 category',
+      });
+    }
+
+    const result = await NotificationService.markCategoryAsRead(req.user._id, category);
+
+    res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    if (error.message.startsWith('不支持的通知大类')) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+    next(error);
+  }
+};
+
+exports.markTypesAsRead = async (req, res, next) => {
+  try {
+    const { types } = req.body;
+    if (!types || !Array.isArray(types)) {
+      return res.status(400).json({
+        success: false,
+        message: '请提供通知类型列表 types',
+      });
+    }
+
+    const result = await NotificationService.markTypesAsRead(req.user._id, types);
+
+    res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    if (error.message === '请提供要标记已读的通知类型列表') {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
     next(error);
   }
 };

@@ -174,6 +174,59 @@ class NotificationService {
       { isRead: true, readAt: Date.now() }
     );
   }
+
+  static async markCategoryAsRead(userId, category) {
+    const categoryTypeMap = {
+      repair: ['repair_created', 'repair_assigned', 'repair_completed', 'repair_escalated'],
+      electricity: ['electricity_warning', 'electricity_recharged', 'electricity_cutoff', 'electricity_restored'],
+      visitor: ['visitor_pending', 'visitor_approved', 'visitor_denied', 'visitor_overdue'],
+      late_return: ['late_return', 'late_return_violation', 'late_return_interview', 'interview_scheduled'],
+      hygiene: ['hygiene_inspection', 'hygiene_failed', 'hygiene_warning'],
+      dorm: ['dorm_assignment', 'dorm_change'],
+      system: ['system', 'report_ready'],
+    };
+
+    const types = categoryTypeMap[category];
+    if (!types) {
+      throw new Error(`不支持的通知大类: ${category}，可选值: ${Object.keys(categoryTypeMap).join(', ')}`);
+    }
+
+    const result = await Notification.updateMany(
+      {
+        recipientId: userId,
+        isRead: false,
+        type: { $in: types },
+      },
+      { isRead: true, readAt: Date.now() }
+    );
+
+    return {
+      category,
+      matchedCount: result.matchedCount,
+      modifiedCount: result.modifiedCount,
+    };
+  }
+
+  static async markTypesAsRead(userId, types) {
+    if (!Array.isArray(types) || types.length === 0) {
+      throw new Error('请提供要标记已读的通知类型列表');
+    }
+
+    const result = await Notification.updateMany(
+      {
+        recipientId: userId,
+        isRead: false,
+        type: { $in: types },
+      },
+      { isRead: true, readAt: Date.now() }
+    );
+
+    return {
+      types,
+      matchedCount: result.matchedCount,
+      modifiedCount: result.modifiedCount,
+    };
+  }
 }
 
 module.exports = NotificationService;
