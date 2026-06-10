@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const OperationReport = require('../models/OperationReport');
 const Bed = require('../models/Bed');
 const RepairOrder = require('../models/RepairOrder');
@@ -259,24 +260,65 @@ class ReportService {
 
   static async getBuildingComparison(params) {
     const { buildingIds, startDate, endDate } = params;
-    const start = moment(startDate).startOf('day').toDate();
-    const end = moment(endDate).endOf('day').toDate();
+
+    if (!startDate || !endDate) {
+      throw new AppError('请提供开始日期和结束日期', 400);
+    }
+
+    const start = moment(startDate);
+    const end = moment(endDate);
+
+    if (!start.isValid() || !end.isValid()) {
+      throw new AppError('日期格式不正确，请使用 YYYY-MM-DD 格式', 400);
+    }
+
+    if (start.isAfter(end)) {
+      throw new AppError('开始日期不能晚于结束日期', 400);
+    }
+
+    const startDateObj = start.startOf('day').toDate();
+    const endDateObj = end.endOf('day').toDate();
+
+    let validBuildingIds = [];
+    let invalidIds = [];
+
+    if (buildingIds && buildingIds.length > 0) {
+      for (const id of buildingIds) {
+        if (mongoose.Types.ObjectId.isValid(id)) {
+          validBuildingIds.push(id);
+        } else {
+          invalidIds.push(id);
+        }
+      }
+
+      if (invalidIds.length > 0) {
+        throw new AppError(`无效的楼栋ID: ${invalidIds.join(', ')}`, 400);
+      }
+    }
 
     const buildings = await Building.find({}).select('_id name code gender');
-    const targetBuildings = buildingIds && buildingIds.length > 0
-      ? buildings.filter((b) => buildingIds.includes(b._id.toString()))
-      : buildings;
+    let targetBuildings = buildings;
+
+    if (validBuildingIds.length > 0) {
+      targetBuildings = buildings.filter((b) => validBuildingIds.includes(b._id.toString()));
+      if (targetBuildings.length === 0) {
+        throw new AppError('未找到匹配的楼栋', 400);
+      }
+    }
+
+    const matchConditions = {
+      reportDate: { $gte: startDateObj, $lte: endDateObj },
+      reportType: 'building_daily',
+    };
+
+    if (validBuildingIds.length > 0) {
+      matchConditions.buildingId = {
+        $in: validBuildingIds.map((id) => new mongoose.Types.ObjectId(id)),
+      };
+    }
 
     const reports = await OperationReport.aggregate([
-      {
-        $match: {
-          reportDate: { $gte: start, $lte: end },
-          reportType: 'building_daily',
-          ...(buildingIds && buildingIds.length > 0 && {
-            buildingId: { $in: buildingIds.map((id) => new mongoose.Types.ObjectId(id)) },
-          }),
-        },
-      },
+      { $match: matchConditions },
       {
         $group: {
           _id: '$buildingId',
@@ -369,6 +411,11 @@ class ReportService {
             buildingStats.reduce((sum, b) => sum + b.avgRepairResponseTime, 0) / buildingStats.length
           )
         : 0,
+      avgRepairCompletionTime: buildingStats.length > 0
+        ? Math.round(
+            buildingStats.reduce((sum, b) => sum + b.avgRepairCompletionTime, 0) / buildingStats.length
+          )
+        : 0,
       totalLateReturnCount: buildingStats.reduce((sum, b) => sum + b.totalLateReturnCount, 0),
       totalLateReturnStudents: buildingStats.reduce((sum, b) => sum + b.totalLateReturnStudents, 0),
       totalElectricityRecharge: Math.round(
@@ -377,6 +424,11 @@ class ReportService {
       totalElectricityConsumption: Math.round(
         buildingStats.reduce((sum, b) => sum + b.totalElectricityConsumption, 0) * 100
       ) / 100,
+      avgElectricityAccounts: buildingStats.length > 0
+        ? Math.round(
+            buildingStats.reduce((sum, b) => sum + b.avgElectricityAccounts, 0) / buildingStats.length
+          )
+        : 0,
       totalVisitorTotal: buildingStats.reduce((sum, b) => sum + b.totalVisitorTotal, 0),
       totalVisitorOverdue: buildingStats.reduce((sum, b) => sum + b.totalVisitorOverdue, 0),
       totalHygieneTotal: buildingStats.reduce((sum, b) => sum + b.totalHygieneTotal, 0),
@@ -391,8 +443,8 @@ class ReportService {
     };
 
     return {
-      startDate: start,
-      endDate: end,
+      startDate: startDateObj,
+      endDate: endDateObj,
       buildingStats,
       summary,
     };
