@@ -98,7 +98,7 @@ class NotificationService {
       },
     ]);
 
-    const typeMap = {
+    const detailedMap = {
       dorm_assignment: 0,
       dorm_change: 0,
       repair_created: 0,
@@ -126,16 +126,28 @@ class NotificationService {
     };
 
     for (const stat of stats) {
-      if (typeMap[stat._id] !== undefined) {
-        typeMap[stat._id] = stat.count;
+      if (detailedMap[stat._id] !== undefined) {
+        detailedMap[stat._id] = stat.count;
       }
     }
 
-    const total = Object.values(typeMap).reduce((sum, count) => sum + count, 0);
+    const total = Object.values(detailedMap).reduce((sum, count) => sum + count, 0);
+
+    const categories = {
+      repair: detailedMap.repair_created + detailedMap.repair_assigned + detailedMap.repair_completed + detailedMap.repair_escalated,
+      electricity: detailedMap.electricity_warning + detailedMap.electricity_recharged + detailedMap.electricity_cutoff + detailedMap.electricity_restored,
+      visitor: detailedMap.visitor_pending + detailedMap.visitor_approved + detailedMap.visitor_denied + detailedMap.visitor_overdue,
+      late_return: detailedMap.late_return + detailedMap.late_return_violation + detailedMap.late_return_interview + detailedMap.interview_scheduled,
+      hygiene: detailedMap.hygiene_inspection + detailedMap.hygiene_failed + detailedMap.hygiene_warning,
+      dorm: detailedMap.dorm_assignment + detailedMap.dorm_change,
+      system: detailedMap.system + detailedMap.report_ready,
+      other: detailedMap.other,
+    };
 
     return {
       total,
-      ...typeMap,
+      categories,
+      detailed: detailedMap,
     };
   }
 

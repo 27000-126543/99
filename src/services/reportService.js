@@ -555,10 +555,12 @@ class ReportService {
     summaryRow.getCell('totalRepairCompleted').value = comparisonData.summary.totalRepairCompleted;
     summaryRow.getCell('repairCompletionRate').value = comparisonData.summary.repairCompletionRate;
     summaryRow.getCell('avgRepairResponseTime').value = comparisonData.summary.avgRepairResponseTime;
+    summaryRow.getCell('avgRepairCompletionTime').value = comparisonData.summary.avgRepairCompletionTime;
     summaryRow.getCell('totalLateReturnCount').value = comparisonData.summary.totalLateReturnCount;
     summaryRow.getCell('totalLateReturnStudents').value = comparisonData.summary.totalLateReturnStudents;
     summaryRow.getCell('totalElectricityRecharge').value = comparisonData.summary.totalElectricityRecharge;
     summaryRow.getCell('totalElectricityConsumption').value = comparisonData.summary.totalElectricityConsumption;
+    summaryRow.getCell('avgElectricityAccounts').value = comparisonData.summary.avgElectricityAccounts;
     summaryRow.getCell('totalVisitorTotal').value = comparisonData.summary.totalVisitorTotal;
     summaryRow.getCell('totalVisitorOverdue').value = comparisonData.summary.totalVisitorOverdue;
     summaryRow.getCell('totalHygieneTotal').value = comparisonData.summary.totalHygieneTotal;

@@ -333,13 +333,34 @@ class DormitoryService {
   }
 
   static async getMyAssignment(studentId) {
-    return await DormitoryAssignment.findOne({
+    let assignment = await DormitoryAssignment.findOne({
       studentId,
       status: { $in: ['pending', 'confirmed'] },
     })
       .populate('bedId')
       .populate('dormitoryId')
       .populate('buildingId');
+
+    if (!assignment) {
+      assignment = await DormitoryAssignment.findOne({
+        studentId,
+        status: 'moved_out',
+      })
+        .sort({ movedOutAt: -1 })
+        .populate('bedId')
+        .populate('dormitoryId')
+        .populate('buildingId');
+
+      if (assignment) {
+        const plain = assignment.toObject();
+        plain.status = 'moved_out';
+        plain.isCheckedOut = true;
+        return plain;
+      }
+      return null;
+    }
+
+    return assignment;
   }
 
   static async getAssignmentHistory(studentId) {
